@@ -1,69 +1,67 @@
-name: Deploy to Modal (Stable)
+name: Modal Single Instance Keepalive (ai-inferbox)
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '38 18 * * *'  # 每30分鐘觸發一次（保活）
+    - cron: '38 18 * * *'  # 每30分钟触发一次（想更省就改成 0 * * * *）
 
 jobs:
-  deploy:
+  single-instance:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25  # 足够覆盖 28 分钟运行时间
+
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+      TARGET_APP_NAME: "ai-inferbox"  # ✅ 这里和你 deploy.py 的 APP_NAME 一致
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Install Modal SDK
-        run: pip install --no-cache-dir --upgrade "modal>=0.58.0"
+      - name: Install Modal SDK + jq
+        run: |
+          pip install --no-cache-dir --upgrade "modal>=0.58.0"
+          sudo apt-get update && sudo apt-get install -y jq
 
-      # ✅ 正確登入（已修復）
       - name: Setup Modal Auth
         run: |
-          modal token set --token-id $MODAL_TOKEN_ID --token-secret $MODAL_TOKEN_SECRET
-        env:
-          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
-          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+          modal token set --token-id "$MODAL_TOKEN_ID" --token-secret "$MODAL_TOKEN_SECRET"
 
-      # ✅ Debug（可刪）
-      - name: Debug Token
+      - name: Stop ONLY running instances of $TARGET_APP_NAME 🔥 关键清理步骤
         run: |
-          echo "ID length: ${#MODAL_TOKEN_ID}"
-          echo "SECRET length: ${#MODAL_TOKEN_SECRET}"
-        env:
-          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
-          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+          modal app list --json | jq -r \
+            ".apps[] | select(.name == \"$TARGET_APP_NAME\" and .status == \"running\") | .app_id" | while read app_id; do
+            if [ -n "$app_id" ]; then
+              echo "Stopping $TARGET_APP_NAME instance: $app_id"
+              modal app stop "$app_id"
+              sleep 3
+            fi
+          done
 
-      # 🚀 啟動 sandbox
-      - name: Run app remotely
-        run: python deploy.py --sandbox
-
-      # 🔥 保活機制（避免被回收）
-      - name: Keep Alive Ping
+      - name: Start new single sandbox instance 🚀
         run: |
-          echo "Keeping workflow alive..."
-          sleep 60
+          python deploy.py --sandbox &
+          sleep 1680  # 让沙盒持续 28 分钟，避免和下一次 Cron 重叠
 
-      # 📝 更新時間（觸發 repo 活躍）
-      - name: Commit time.txt to repo
+      - name: Keep repo active (optional)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
           echo "$(date +'%Y-%m-%d %H:%M:%S')" > time.txt
-
           git add time.txt
-
           if git diff --cached --quiet; then
             echo "No changes"
           else
-            git commit -m "⏱️ keep alive $(date +'%Y-%m-%d %H:%M:%S')"
+            git commit -m "⏱️ Modal keepalive: $(date +'%Y-%m-%d %H:%M:%S')"
             git push origin HEAD:main
           fi
