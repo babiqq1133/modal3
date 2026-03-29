@@ -3,12 +3,12 @@ name: Deploy to Modal (Stable)
 on:
   workflow_dispatch:
   schedule:
-    - cron: '38 18 * * *'  # 每30分鐘觸發一次（保活）
+    - cron: '38 10 * * *'  # 每天 北京时间 18:38 一次
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 3
 
     steps:
       - name: Checkout code
@@ -19,10 +19,11 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install Modal SDK
-        run: pip install --no-cache-dir --upgrade "modal>=0.58.0"
+      - name: Install Modal SDK & jq
+        run: |
+          pip install --no-cache-dir --upgrade "modal>=0.58.0"
+          sudo apt-get update && sudo apt-get install -y jq
 
-      # ✅ 正確登入（已修復）
       - name: Setup Modal Auth
         run: |
           modal token set --token-id $MODAL_TOKEN_ID --token-secret $MODAL_TOKEN_SECRET
@@ -30,40 +31,32 @@ jobs:
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
 
-      # ✅ Debug（可刪）
-      - name: Debug Token
+      # 🔥 只杀你的 ai-inferbox，绝不误删其他
+      - name: Stop old ai-inferbox only
         run: |
-          echo "ID length: ${#MODAL_TOKEN_ID}"
-          echo "SECRET length: ${#MODAL_TOKEN_SECRET}"
-        env:
-          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
-          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+          modal sandbox list --json | jq -r '
+            .[] | 
+            select(.description != null and (.description | contains("ai-inferbox"))) | 
+            .sandbox_id
+          ' | while read id; do
+            if [ -n "$id" ]; then
+              echo "Stopping old sandbox: $id"
+              modal sandbox stop "$id"
+            fi
+          done
 
-      # 🚀 啟動 sandbox
+      # 🚀 启动新实例
       - name: Run app remotely
         run: python deploy.py --sandbox
 
-      # 🔥 保活機制（避免被回收）
-      - name: Keep Alive Ping
-        run: |
-          echo "Keeping workflow alive..."
-          sleep 60
-
-      # 📝 更新時間（觸發 repo 活躍）
-      - name: Commit time.txt to repo
+      # 📌 轻量保活提交
+      - name: Commit time.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
           echo "$(date +'%Y-%m-%d %H:%M:%S')" > time.txt
-
           git add time.txt
-
-          if git diff --cached --quiet; then
-            echo "No changes"
-          else
-            git commit -m "⏱️ keep alive $(date +'%Y-%m-%d %H:%M:%S')"
-            git push origin HEAD:main
-          fi
+          git diff --cached --quiet || git commit -m "⏱️ keep alive"
+          git push origin HEAD:main
