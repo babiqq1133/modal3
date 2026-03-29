@@ -1,14 +1,19 @@
-name: Deploy to Modal (Stable)
+name: Deploy to Modal
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '38 18 * * *'  # 每30分鐘觸發一次（保活）
+    - cron: '38 18 * * *'  # 每天 26 点
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10   
+
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+      MODAL_CONFIG_DIR: /home/runner/.modal
 
     steps:
       - name: Checkout code
@@ -22,48 +27,38 @@ jobs:
       - name: Install Modal SDK
         run: pip install --no-cache-dir --upgrade "modal>=0.58.0"
 
-      # ✅ 正確登入（已修復）
-      - name: Setup Modal Auth
-        run: |
-          modal token set --token-id $MODAL_TOKEN_ID --token-secret $MODAL_TOKEN_SECRET
-        env:
-          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
-          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+      - name: Check Modal version
+        run: python -c "import modal; print(modal.__version__)"
 
-      # ✅ Debug（可刪）
-      - name: Debug Token
+      - name: Inject Modal Token
         run: |
-          echo "ID length: ${#MODAL_TOKEN_ID}"
-          echo "SECRET length: ${#MODAL_TOKEN_SECRET}"
-        env:
-          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
-          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+          mkdir -p $MODAL_CONFIG_DIR
+          echo -e "[default]" > $MODAL_CONFIG_DIR/token.toml
+          echo -e "token_id = \"$MODAL_TOKEN_ID\"" >> $MODAL_CONFIG_DIR/token.toml
+          echo -e "token_secret = \"$MODAL_TOKEN_SECRET\"" >> $MODAL_CONFIG_DIR/token.toml
+          chmod 600 $MODAL_CONFIG_DIR/token.toml
 
-      # 🚀 啟動 sandbox
       - name: Run app remotely
         run: python deploy.py --sandbox
-
-      # 🔥 保活機制（避免被回收）
-      - name: Keep Alive Ping
-        run: |
-          echo "Keeping workflow alive..."
-          sleep 60
-
-      # 📝 更新時間（觸發 repo 活躍）
+      
       - name: Commit time.txt to repo
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          echo "$(date +'%Y-%m-%d %H:%M:%S')" > time.txt
+          if [ ! -f time.txt ]; then
+            echo "首次生成时间：$(date +'%Y-%m-%d %H:%M:%S')" > time.txt
+          else
+            echo "$(date +'%Y-%m-%d %H:%M:%S')" > time.txt
+          fi
 
           git add time.txt
 
           if git diff --cached --quiet; then
-            echo "No changes"
+            echo "无变化，无需提交"
           else
-            git commit -m "⏱️ keep alive $(date +'%Y-%m-%d %H:%M:%S')"
+            git commit -m "⏱️ 更新时间文件: $(date +'%Y-%m-%d %H:%M:%S')"
             git push origin HEAD:main
           fi
