@@ -31,21 +31,22 @@ jobs:
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
 
-      # 🔥 只杀你的 ai-inferbox，绝不误删其他
-      - name: Stop old ai-inferbox only
+      # 🔥 关键：只杀所有 LIVE 状态的 ai-inferbox 沙盒
+      - name: Stop ALL live ai-inferbox sandboxes
         run: |
           modal sandbox list --json | jq -r '
             .[] | 
-            select(.description != null and (.description | contains("ai-inferbox"))) | 
+            select(.status == "live" and (.description | contains("ai-inferbox"))) | 
             .sandbox_id
           ' | while read id; do
             if [ -n "$id" ]; then
-              echo "Stopping old sandbox: $id"
+              echo "Stopping LIVE sandbox: $id"
               modal sandbox stop "$id"
+              sleep 2
             fi
           done
 
-      # 🚀 启动新实例
+      # 🚀 启动新沙盒
       - name: Run app remotely
         run: python deploy.py --sandbox
 
