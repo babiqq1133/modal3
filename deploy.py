@@ -1,4 +1,5 @@
 import modal
+import time
 
 APP_NAME = "ai-inferbox"
 WORKSPACE_DIR = "/workspace"
@@ -13,6 +14,18 @@ image = (
 )
 
 def run_in_sandbox():
+    # ===================== 新增：自动清理旧沙盒 =====================
+    print("🧽 Cleaning old sandbox instances...")
+    for sb in modal.Sandbox.list():
+        try:
+            if sb.app_id == app.app_id:
+                print(f"🔪 Killing old sandbox: {sb.object_id}")
+                sb.terminate()
+        except:
+            pass
+    time.sleep(2)
+    # ===============================================================
+
     print("🧪 Launching sandbox...")
 
     sandbox = modal.Sandbox.create(app=app, image=image,timeout=86400,region="asia-southeast1")
